@@ -5,6 +5,13 @@ BIN = D11boot
 ##############################################################################
 .PHONY: all directory clean size
 
+# CFLAGS += -DUSE_DBL_TAP /* comment out to use GPIO input for bootloader entry */
+# CFLAGS += -DUSE_GPIO
+# CFLAGS += -DUSE_CRC
+CFLAGS += -DUSE_WDT
+# CFLAGS += -DSTART_ADDR=0x400  # 1KB
+CFLAGS += -DSTART_ADDR=0x1000  # 4KB
+
 CC = arm-none-eabi-gcc
 OBJCOPY = arm-none-eabi-objcopy
 SIZE = arm-none-eabi-size

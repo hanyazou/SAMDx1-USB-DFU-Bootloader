@@ -44,7 +44,6 @@ NOTES:
 #include "usb_descriptors.h"
 
 /*- Definitions -------------------------------------------------------------*/
-#define USE_DBL_TAP /* comment out to use GPIO input for bootloader entry */
 #define USB_CMD(dir, rcpt, type) ((USB_##dir##_TRANSFER << 7) | (USB_##type##_REQUEST << 5) | (USB_##rcpt##_RECIPIENT << 0))
 #define SIMPLE_USB_CMD(rcpt, type) ((USB_##type##_REQUEST << 5) | (USB_##rcpt##_RECIPIENT << 0))
 
@@ -211,7 +210,7 @@ static void USB_Service(void)
           if (request->wLength)
           {
             dfu_status = dfu_status_choices + 2;
-            dfu_addr = 0x400 + request->wValue * 64;
+            dfu_addr = START_ADDR + request->wValue * 64;
           }
           /* fall through */
         default: // DFU_UPLOAD & others
@@ -233,7 +232,7 @@ static void USB_Service(void)
 
 void bootloader(void)
 {
-#ifndef USE_DBL_TAP
+#ifdef USE_GPIO
   /* configure PA15 (bootloader entry pin used by SAM-BA) as input pull-up */
   PORT->Group[0].PINCFG[15].reg = PORT_PINCFG_PULLEN | PORT_PINCFG_INEN;
   PORT->Group[0].OUTSET.reg = (1UL << 15);
@@ -241,8 +240,9 @@ void bootloader(void)
 
   PAC1->WPCLR.reg = 2; /* clear DSU */
 
-  DSU->ADDR.reg = 0x400; /* start CRC check at beginning of user app */
-  DSU->LENGTH.reg = *(volatile uint32_t *)0x410; /* use length encoded into unused vector address in user app */
+#ifdef USE_CRC
+  DSU->ADDR.reg = START_ADDR; /* start CRC check at beginning of user app */
+  DSU->LENGTH.reg = *(volatile uint32_t *)(START_ADDR + 0x10); /* use length encoded into unused vector address in user app */
 
   /* ask DSU to compute CRC */
   DSU->DATA.reg = 0xFFFFFFFF;
@@ -251,13 +251,24 @@ void bootloader(void)
 
   if (DSU->DATA.reg)
     goto run_bootloader; /* CRC failed, so run bootloader */
+#else
+  uint32_t pc = *(volatile uint32_t *)(START_ADDR + 4);
+  if (pc < START_ADDR || 0x20000000 <= pc)
+    goto run_bootloader; /* unless reset handler was found, run bootloader */
+#endif
 
-#ifndef USE_DBL_TAP
+#ifdef USE_WDT
+  // if reset was caused by watchdog timer (WDT), run bootloader
+  if (PM->RCAUSE.reg & PM_RCAUSE_WDT)
+    goto run_bootloader;
+#endif
+
+#ifdef USE_GPIO
   if (!(PORT->Group[0].IN.reg & (1UL << 15)))
     goto run_bootloader; /* pin grounded, so run bootloader */
+#endif
 
-  return; /* we've checked everything and there is no reason to run the bootloader */
-#else
+#ifdef USE_DBL_TAP
   if (PM->RCAUSE.reg & PM_RCAUSE_POR)
     *DBL_TAP_PTR = 0; /* a power up event should never be considered a 'double tap' */
   
@@ -273,8 +284,9 @@ void bootloader(void)
   volatile int wait = 65536; while (wait--);
   /* however, if execution reaches this point, the window of opportunity has closed and the "magic" disappears  */
   *DBL_TAP_PTR = 0;
-  return;
 #endif
+
+  return; /* we've checked everything and there is no reason to run the bootloader */
 
 run_bootloader:
 #if 1
